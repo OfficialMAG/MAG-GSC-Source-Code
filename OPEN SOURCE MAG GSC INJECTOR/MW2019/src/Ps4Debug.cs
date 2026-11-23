@@ -1,0 +1,201 @@
+﻿using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Net.Sockets;
+using System.Text;
+
+public class MapEntry { public string Name; public ulong Start, End; public ushort Prot; }
+public class ProcEntry { public string Name; public int Pid; public override string ToString() { return Name + " (pid " + Pid + ")"; } }
+
+// Protocole ps4debug (port 744) : en-tete {0xFFAABBCC, cmd, longueur} puis donnees ; reponse = statut 0x80000000.
+public class Ps4Debug
+{
+    const uint Magic = 0xFFAABBCC, Success = 0x80000000;
+    const uint CmdProcList = 0xBDAA0001, CmdProcRead = 0xBDAA0002, CmdProcWrite = 0xBDAA0003, CmdProcMaps = 0xBDAA0004;
+    const uint CmdNotify = 0xBDDD0004, CmdProcAlloc = 0xBDAA000B, CmdProcFree = 0xBDAA000C;
+    TcpClient tcp; NetworkStream ns;
+    public readonly object Lock = new object();
+    public bool Connected { get { return tcp != null && tcp.Connected; } }
+
+    public void Connect(string ip, int port)
+    {
+        Connect(ip, port, 5000, 10000);
+    }
+    public void Connect(string ip, int port, int connectTimeout, int receiveTimeout)
+    {
+        Close();
+        tcp = new TcpClient();
+        try
+        {
+            var ar = tcp.BeginConnect(ip, port, null, null);
+            using (ar.AsyncWaitHandle)
+            {
+                if (!ar.AsyncWaitHandle.WaitOne(connectTimeout)) throw new TimeoutException(L.T("pas de reponse de ", "no response from ") + ip + ":" + port);
+                tcp.EndConnect(ar);
+            }
+            tcp.NoDelay = true;
+            tcp.ReceiveTimeout = receiveTimeout; tcp.SendTimeout = receiveTimeout;
+            ns = tcp.GetStream();
+        }
+        catch { Close(); throw; }
+    }
+    public void Close() { if (tcp != null) tcp.Close(); tcp = null; ns = null; }
+
+    // CMD_VERSION has no status word: uint32 length, then ASCII version.
+    public string Version()
+    {
+        lock (Lock)
+        {
+            Cmd(0xBD000001, null);
+            uint size = BitConverter.ToUInt32(Recv(4), 0);
+            if (size == 0 || size > 256) throw new IOException(L.T("reponse de version ps4debug invalide", "invalid ps4debug version response"));
+            string version = Encoding.ASCII.GetString(Recv((int)size)).TrimEnd('\0');
+            if (version.Length == 0) throw new IOException("Version ps4debug vide");
+            foreach (char ch in version) if (ch < 32 || ch > 126) throw new IOException("Version ps4debug invalide");
+            return version;
+        }
+    }
+    public static string ProbeVersion(string ip, int port, int timeout)
+    {
+        var probe = new Ps4Debug();
+        try { probe.Connect(ip, port, timeout, timeout); return probe.Version(); }
+        finally { probe.Close(); }
+    }
+
+    void Send(byte[] b) { try { if(ns==null)throw new IOException("ps4debug deconnecte"); ns.Write(b, 0, b.Length); } catch { Close(); throw; } }
+    byte[] Recv(int n)
+    {
+        try
+        {
+            var b = new byte[n]; int o = 0;
+            while (o < n) { if(ns==null)throw new IOException("ps4debug deconnecte"); int r = ns.Read(b, o, n - o); if (r <= 0) throw new IOException(L.T("connexion fermee", "connection closed")); o += r; }
+            return b;
+        }
+        catch { Close(); throw; }
+    }
+    void Cmd(uint cmd, byte[] data)
+    {
+        var h = new byte[12];
+        BitConverter.GetBytes(Magic).CopyTo(h, 0);
+        BitConverter.GetBytes(cmd).CopyTo(h, 4);
+        BitConverter.GetBytes(data == null ? 0 : data.Length).CopyTo(h, 8);
+        Send(h);
+        if (data != null && data.Length > 0) Send(data);
+    }
+    void Status()
+    {
+        uint s = BitConverter.ToUInt32(Recv(4), 0);
+        if (s != Success) { Close(); throw new IOException(string.Format(L.T("ps4debug a repondu 0x{0:X8}; connexion fermee pour eviter une desynchronisation", "ps4debug replied 0x{0:X8}; connection closed to prevent desynchronization"), s)); }
+    }
+    static byte[] RwPacket(int pid, ulong addr, int len)
+    {
+        var p = new byte[16];
+        BitConverter.GetBytes(pid).CopyTo(p, 0);
+        BitConverter.GetBytes(addr).CopyTo(p, 4);
+        BitConverter.GetBytes(len).CopyTo(p, 12);
+        return p;
+    }
+
+    public List<ProcEntry> ProcList()
+    {
+        lock (Lock)
+        {
+            Cmd(CmdProcList, null); Status();
+            int n = BitConverter.ToInt32(Recv(4), 0);
+            if (n < 0 || n > 4096) { Close(); throw new IOException("Nombre de processus ps4debug incoherent : " + n); }
+            var d = Recv(n * 36); var l = new List<ProcEntry>();
+            for (int i = 0; i < n; i++)
+                l.Add(new ProcEntry { Name = Encoding.ASCII.GetString(d, i * 36, 32).TrimEnd('\0'), Pid = BitConverter.ToInt32(d, i * 36 + 32) });
+            return l;
+        }
+    }
+    public List<MapEntry> Maps(int pid)
+    {
+        lock (Lock)
+        {
+            Cmd(CmdProcMaps, BitConverter.GetBytes(pid)); Status();
+            int n = BitConverter.ToInt32(Recv(4), 0);
+            if (n < 0 || n > 65536) { Close(); throw new IOException("Nombre de regions ps4debug incoherent : " + n); }
+            var d = Recv(n * 58); var l = new List<MapEntry>();
+            for (int i = 0; i < n; i++)
+            {
+                int o = i * 58;
+                l.Add(new MapEntry
+                {
+                    Name = Encoding.ASCII.GetString(d, o, 32).TrimEnd('\0'),
+                    Start = BitConverter.ToUInt64(d, o + 32),
+                    End = BitConverter.ToUInt64(d, o + 40),
+                    Prot = BitConverter.ToUInt16(d, o + 56)
+                });
+            }
+            return l;
+        }
+    }
+    public byte[] Read(int pid, ulong addr, int len)
+    {
+        lock (Lock) { Cmd(CmdProcRead, RwPacket(pid, addr, len)); Status(); return Recv(len); }
+    }
+    public void Write(int pid, ulong addr, byte[] data)
+    {
+        lock (Lock) { Cmd(CmdProcWrite, RwPacket(pid, addr, data.Length)); Status(); Send(data); Status(); }
+    }
+    // Notification systeme de la PS4 (sceSysUtilSendSystemNotificationWithText) : {type, longueur} puis le texte UTF-8 termine par 0.
+    public void Notify(int type, string text)
+    {
+        var t = Encoding.UTF8.GetBytes(text + "\0"); var p = new byte[8];
+        BitConverter.GetBytes(type).CopyTo(p, 0);
+        BitConverter.GetBytes(t.Length).CopyTo(p, 4);
+        lock (Lock) { Cmd(CmdNotify, p); Send(t); Status(); }
+    }
+    // allocation dans le processus du jeu : {pid, longueur} -> adresse 64 bits
+    public ulong Alloc(int pid, int len)
+    {
+        var p = new byte[8];
+        BitConverter.GetBytes(pid).CopyTo(p, 0);
+        BitConverter.GetBytes(len).CopyTo(p, 4);
+        lock (Lock) { Cmd(CmdProcAlloc, p); Status(); return BitConverter.ToUInt64(Recv(8), 0); }
+    }
+    public void Free(int pid, ulong addr, int len)
+    {
+        var p = new byte[16];
+        BitConverter.GetBytes(pid).CopyTo(p, 0);
+        BitConverter.GetBytes(addr).CopyTo(p, 4);
+        BitConverter.GetBytes(len).CopyTo(p, 12);
+        lock (Lock) { Cmd(CmdProcFree, p); Status(); }
+    }
+
+    // Protocol layout from libdebug: install -> uint64 stub; call -> {int pid, uint64 rax}.
+    public ulong InstallRpc(int pid)
+    {
+        lock (Lock) { Cmd(0xBDAA0005, BitConverter.GetBytes(pid)); Status(); return BitConverter.ToUInt64(Recv(8), 0); }
+    }
+    public ulong Call(int pid, ulong stub, ulong function, params ulong[] args)
+    {
+        if (args.Length > 6) throw new ArgumentException("RPC: maximum 6 arguments");
+        var p = new byte[68];
+        BitConverter.GetBytes(pid).CopyTo(p, 0);
+        BitConverter.GetBytes(stub).CopyTo(p, 4);
+        BitConverter.GetBytes(function).CopyTo(p, 12);
+        for (int i = 0; i < args.Length; i++) BitConverter.GetBytes(args[i]).CopyTo(p, 20 + i * 8);
+        lock (Lock)
+        {
+            Cmd(0xBDAA0006, p); Status(); var r = Recv(12);
+            if (BitConverter.ToInt32(r, 0) != pid) throw new IOException("RPC: PID inattendu");
+            return BitConverter.ToUInt64(r, 4);
+        }
+    }
+    // envoi du payload ps4debug au chargeur bin de GoldHEN (port 9090 par defaut)
+    public static void SendPayload(string ip, int port, byte[] payload)
+    {
+        using (var c = new TcpClient())
+        {
+            var ar = c.BeginConnect(ip, port, null, null);
+            if (!ar.AsyncWaitHandle.WaitOne(5000)) throw new Exception(L.T("pas de reponse de ", "no response from ") + ip + ":" + port + L.T(" (chargeur bin de GoldHEN active ?)", " (is the GoldHEN bin loader enabled?)"));
+            c.EndConnect(ar);
+            c.SendTimeout = 10000;
+            var ns = c.GetStream();
+            ns.Write(payload, 0, payload.Length);
+            ns.Flush();
+        }
+    }
+}
