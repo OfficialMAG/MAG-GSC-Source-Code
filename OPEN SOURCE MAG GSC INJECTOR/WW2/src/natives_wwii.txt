@@ -1,0 +1,71 @@
+# Natives WWII PS4 1.25 vérifiées (code de default_mp.elf comparé à MWR PS4 1.15). type id nom # note
+func 0x46 int # prototype
+func 0xF1 newclienthudelem # prototype
+func 0x69 anglestoforward # prototype
+meth 0x82E9 hide # prototype
+meth 0x82E8 show # prototype
+meth 0x8127 freezecontrols # prototype
+meth 0x8107 getvelocity # prototype
+meth 0x80F0 setvelocity # prototype
+meth 0x8109 getplayerangles # vérifié 21/10 : client +0x240 -> vecteur
+meth 0x8110 isonground # prototype
+meth 0x80F7 getcurrentweapon # prototype
+meth 0x8100 givemaxammo # prototype
+meth 0x812C setweaponammoclip # prototype
+meth 0x80F4 giveweapon # prototype
+meth 0x80F5 takeweapon # prototype
+meth 0x80FB switchtoweapon # prototype
+meth 0x80C1 suicide # prototype
+meth 0x82CA scaleovertime # prototype
+meth 0x80C3 iprintln # prototype
+meth 0x80C4 iprintlnbold # prototype
+meth 0x82B7 settext # prototype + vérifié (« Hud Elem String », localized string)
+meth 0x82B9 setshader # prototype
+meth 0x82C9 fadeovertime # prototype
+meth 0x82CB moveovertime # prototype
+meth 0x82CD destroy # prototype
+meth 0x8092 setmovespeedscale # prototype
+meth 0x8106 setorigin # prototype
+meth 0x8108 setplayerangles # prototype
+meth 0x810B usebuttonpressed # prototype
+meth 0x810C attackbuttonpressed # prototype
+meth 0x810D adsbuttonpressed # prototype
+meth 0x80ED fragbuttonpressed # prototype
+meth 0x80EE secondaryoffhandbuttonpressed # prototype
+meth 0x8132 setclientdvar # prototype
+meth 0x806D getstance # prototype
+meth 0x810E meleebuttonpressed # masque al&4 comme MWR
+meth 0x83DF jumpbuttonpressed # masque ah&4 comme MWR
+meth 0x83BC sprintbuttonpressed # masque al&2 comme MWR
+meth 0x82B8 clearalltextafterhudelem # entre settext et setshader comme MWR (0x82A4/A5/A6)
+meth 0x82C4 setvalue # +0x13 comme settext/setshader, code proche
+meth 0x8119 disableweapons # bloc +7, code identique (16 instr)
+meth 0x811A enableweapons # bloc +7, code identique
+meth 0x807F getentitynumber # code identique (46 instr, sim 1.00)
+meth 0x80F6 takeallweapons # bloc +6 entre takeweapon et getcurrentweapon
+meth 0x80F8 getcurrentprimaryweapon # bloc +6, 42 instr comme MWR
+meth 0x80FA hasweapon # bloc +6, native à nom d'arme (« alt+ »)
+meth 0x80FC switchtoweaponimmediate # bloc +6, même forme que switchtoweapon
+meth 0x80F2 getnormalizedmovement # bloc +6, 53 instr / 51
+meth 0x812D setweaponammostock # bloc +4, codes d'erreur 1588/1589 qui se suivent
+meth 0x812E getweaponammoclip # bloc +4
+meth 0x812F getweaponammostock # bloc +4, code 1591
+meth 0x8131 setclientomnvar # bloc +4, nom d'omnvar en paramètre 0
+meth 0x8154 notifyonplayercommand # 2 chaînes, avertissement 1649 si != 2 paramètres ; 0x8151/52 = stubs, 0x8153 absent
+func 0x13 isdefined # code identique à MWR 0x12 (type != 0, cas objet)
+func 0x17 setomnvar # 21/10 : cherche l'omnvar par son nom (table 0x10AEC900, erreur 1832), écrit le paramètre 1 (0xA32E60) ; 0x18 = lecture (getomnvar)
+func 0xE9 isalive # 22/10 : corps comparé à MWR 0xF3 (santé du gentity > 0, même suite) - outils/cmpnat.py
+func 0x135 kick # 22/10 : native 0x135 -> 0xA3E3C0, seule native qui référence « EXE_PLAYERKICKED » (MWR 0x13C idem)
+meth 0x85C4 setclientthirdperson # 22/10 : même code que MWR 0x857E (client +0x258/+0x268 -> playerState, drapeau 0x80000 à +0x60 selon le paramètre int) ; PC 0x85C9 appelé par le jeu pendant les exécutions
+meth 0x80D9 setrank # 22/10 : = MWR 0x80D3 : rang (int < 0x10000) en mot à playerState+0x5A00, prestige facultatif (int < 0x100) en octet à +0x59F0
+func 0x19 setdvar # 22/10 : même code que MWR 0x17 (contrôle des caractères du nom, « _ » 0x5F) ; 0x1A = setdynamicdvar (jumeau)
+meth 0x82A7 giveachievement # 22/10 : = MWR 0x8293 : 1 paramètre, commande serveur '4' + nom -> client 0x7D8C00 -> 0xB2A010 (table de 90 noms à 0x1035AC0) -> sceNpTrophyUnlockTrophy
+meth 0x815A player_recoilscaleon # 22/10 : = MWR 0x8153 (int < 0x65, drapeau 4 à playerState+0x5ED + échelle) ; 0x815B = player_recoilscaleoff (and 0xFB), = MWR 0x8154
+meth 0x815B player_recoilscaleoff # 22/10 : voir player_recoilscaleon
+func 0x10A map_restart # 22/10 : = MWR 0x113 : état de redémarrage = 1, paramètre int facultatif, file de commandes sous verrou (0x10B = 2, 0x10C = 3)
+meth 0x80B4 getplayerdata # 07/11 : code = MWR 0x80B1
+meth 0x80B5 setplayerdata # 07/11 : code = MWR 0x80B2
+func 0x6F issubstr # 14/11 : align_mwr_ww2 0x6F <- mwr 0x70 ; ancres isdefined/int de l'alignement = nos valeurs vérifiées
+func 0xBE tablelookup # 14/11 : align 0xBE <- mwr 0xC6 (TableLookup(file,col,val,retcol))
+func 0xBF tablelookupbyrow # 14/11 : align 0xBF <- mwr 0xC7 ; confirmé par Royal_WW2_MP (_func_0BF)
+func 0xC2 tablelookuprownum # 14/11 : align 0xC2 <- mwr 0xCA ; confirmé par Royal_WW2_MP (_func_0C2)
